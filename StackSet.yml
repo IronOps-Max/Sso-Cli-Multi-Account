@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: ALB + ASG + CodeDeploy (reads artifacts from Dev S3 with CMK)
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: AMI ID with systemd + yum/apt (Amazon Linux 2 recommended)
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: ""
+  DevArtifactBucketName:
+    Type: String
+    Description: Name of the artifacts bucket in Dev account
+  DevArtifactKmsKeyArn:
+    Type: String
+    Description: KMS CMK ARN in Dev account that encrypts the artifacts
+  AppName:
+    Type: String
+    Default: MyApp
+  DgName:
+    Type: String
+    Default: MyDG
+
+Resources:
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP to ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: "200"
+
+  ApplicationLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets: !Ref Subnets
+      SecurityGroups: [ !Ref ALBSecurityGroup ]
+      Scheme: internet-facing
+      Type: application
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # Instance role for EC2 to pull artifacts and run CodeDeploy agent
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: EC2ReadArtifactsFromDev
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub arn:aws:s3:::${DevArtifactBucketName}/*
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !Ref DevArtifactKmsKeyArn
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref EC2Role ]
+
+  # CodeDeploy service role in each account
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codedeploy.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeDeployAccessALBASGAndArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ALB/ASG control
+              - Effect: Allow
+                Action:
+                  - autoscaling:*
+                  - elasticloadbalancing:*
+                  - ec2:Describe*
+                Resource: "*"
+              # Read artifacts from Dev bucket
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub arn:aws:s3:::${DevArtifactBucketName}/*
+              # Decrypt using Dev CMK
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !Ref DevArtifactKmsKeyArn
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !If [ HasKeyName, !Ref KeyName, !Ref "AWS::NoValue" ]
+        SecurityGroupIds: [ !Ref ALBSecurityGroup ]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -eux
+            # Install CodeDeploy agent (Amazon Linux 2)
+            yum update -y
+            yum install -y ruby wget
+            cd /tmp
+            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+            chmod +x ./install
+            ./install auto
+            systemctl enable codedeploy-agent
+            systemctl start codedeploy-agent
+            # simple web default
+            echo "OK" > /var/www/html/index.html || true
+
+  HasKeyName:
+    Type: "AWS::SSM::Parameter::Value<String>"
+    Default: "/does/not/exist" # dummy to allow condition
+    # (Using a simple If above; you can remove KeyName parameter if unused)
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref Subnets
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "1"
+      TargetGroupARNs: [ !Ref TargetGroup ]
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT5M
+        WaitOnResourceSignals: false
+
+  CodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Ref AppName
+      ComputePlatform: Server
+
+  CodeDeployDG:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn: ALBListener
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Ref DgName
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      AutoScalingGroups: [ !Ref AutoScalingGroup ]
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !GetAtt TargetGroup.TargetGroupName
+
+Outputs:
+  LoadBalancerDNS:
+    Value: !GetAtt ApplicationLB.DNSName
+    Description: Public DNS of the ALB

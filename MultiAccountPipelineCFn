@@ -1,0 +1,319 @@
+StackSet spanning 2 accounts (dev + prod)
+
+Resources to provision per account:
+
+ALB (Application Load Balancer)
+
+Target Group (TG)
+
+Security Group (SG)
+
+Auto Scaling Group (ASG) (with Launch Template/Config)
+
+CodeDeploy Application & DeploymentGroup (for your app)
+
+IAM roles needed for CodeDeploy
+
+Artifacts already live in S3 (Dev account) with a CMK → CodeDeploy in both accounts must access that bucket.
+
+## 🔹 Step 1: Understand the Flow
+Prod is the management account (AWS Organizations “management/primary” account) and Dev is a member account. Here’s the corrected, end-to-end plan to stand up a service-managed StackSet that deploys, in both accounts:
+
+VPC-facing infra: ALB + Target Group + SG + ASG (+ Launch Template)
+
+CodeDeploy Application + DeploymentGroup
+
+IAM roles for CodeDeploy service & EC2 instances
+
+Read artifacts from a CMK-encrypted S3 bucket in the Dev account
+
+I’ll give you:
+
+What to prepare in each account
+
+The cross-account S3/KMS policies (Dev bucket/key)
+
+A single StackSet template you deploy from Prod to both accounts
+
+The CLI commands to create the StackSet and instances (with your two profiles)
+
+# 0) Prereqs (run in Prod unless noted)
+
+You have two AWS CLI profiles:
+
+prod → management account
+
+dev → member account
+
+Decide deployment region (example: us-east-1).
+
+You know your Dev S3 bucket name (artifacts) and its CMK ARN (in Dev).
+
+## 1) Enable “Service-managed” StackSets via AWS Organizations (Prod):
+
+     enable trusted access for StackSets in Organizations (Prod as management)
+aws organizations enable-aws-service-access \
+  --service-principal stacksets.cloudformation.amazonaws.com \
+  --profile prod
+
+
+  won't work
+
+  ## using Self Managed roles
+
+  We have:
+
+Prod → management account (owns the StackSet)
+
+Dev → member account (target account)
+
+We need two roles:
+
+StackSetAdminRole → in Prod (administration role)
+
+StackSetExecutionRole → in Dev (execution role)
+
+## Step 1: Create the Administration Role in Prod
+
+This role will be assumed by CloudFormation StackSet to create stacks in member accounts.
+
+1.1 Trust Policy
+
+Create a file admin-trust-policy.json:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudformation.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+## 1.3 Attach AdministratorAccess policy
+aws iam attach-role-policy \
+  --role-name StackSetAdminRole \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess \
+  --profile Prod
+
+## Step 2: Create the Execution Role in Dev
+
+This role will be assumed by the StackSet to deploy resources in the Dev account.
+
+2.1 Trust Policy (allow Prod StackSetAdminRole to assume)
+
+Create execution-trust-policy.json:
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<PROD_ACCOUNT_ID>:role/StackSetAdminRole"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+
+Replace <PROD_ACCOUNT_ID> with your Prod account ID.
+
+2.2 Create Role via CLI
+aws iam create-role \
+  --role-name StackSetExecutionRole \
+  --assume-role-policy-document file://execution-trust-policy.json \
+  --description "Execution role for self-managed StackSets" \
+  --profile Dev
+
+aws iam attach-role-policy \
+  --role-name StackSetExecutionRole \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess \
+  --profile dev
+
+Later, you can replace AdministratorAccess with fine-grained policies that allow:
+
+ALB / ASG / EC2 / CodeDeploy / S3 (Dev artifacts)
+
+KMS decrypt for Dev CMK
+
+
+switch to make dev as admin and prod as execution ok 
+
+## create stackset 
+aws cloudformation create-stack-set \
+  --stack-set-name ExampleS3StackSet \
+  --template-body file://s3-bucket-stackset.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --administration-role-arn arn:aws:iam::AccoountIDdevID:role/StackSetAdminRole \
+  --execution-role-name StackSetExecutionRole \
+  --profile Dev
+
+
+## dev and prod accounts
+aws cloudformation create-stack-instances \
+  --stack-set-name ExampleS3StackSet \
+  --accounts Account1 Account2 \  
+  --regions us-east-1 \
+  --parameter-overrides \
+      ParameterKey=BucketName,ParameterValue="my-example-bucket-dev-prod" \
+  --profile Dev
+
+## Step 4: Verify Deployment
+
+Check the stack instances:
+
+aws cloudformation describe-stack-set-operation \
+  --stack-set-name ExampleS3StackSet \
+  --operation-id 0908dba2-853c-47c3-b259-f2dfa4c43bc8 \
+  --profile Dev
+
+
+<OPERATION_ID> comes from create-stack-instances response
+
+Wait until Status: SUCCEEDED
+
+You should now see an S3 bucket created in both Dev and Prod accounts.
+
+## You need to create the execution role in the Dev account as well.
+
+1. Log into Dev account (with your SSO --profile dev) and run:
+aws iam create-role \
+  --role-name StackSetExecutionRole \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::<DEV_ACCOUNT_ID>:role/StackSetAdminRole"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }' \
+  --profile dev
+
+
+⚠️ Replace <DEV_ACCOUNT_ID> with your Dev account ID (123555555).
+This makes sure the Admin role in Dev can assume the Execution role in Dev.
+
+2. Attach a policy so the Execution Role can actually create resources (S3 in this example):
+aws iam attach-role-policy \
+  --role-name StackSetExecutionRole \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess \
+  --profile Dev
+
+## if you want to execute stackset one account
+
+aws cloudformation create-stack-instances \
+  --stack-set-name ExampleS3StackSet \
+  --accounts AcountNum \
+  --regions us-east-1 \
+  --parameter-overrides \
+      ParameterKey=BucketName,ParameterValue="my-u-dev-unique-bucket-dev" \
+  --profile Dev
+
+## We’ll create a CloudFormation template that defines both roles needed for self-managed StackSets:
+
+StackSetAdminRole → lives in the Management/Admin account (your Prod account AccountId).
+
+Trusts CloudFormation service (cloudformation.amazonaws.com).
+
+Allows assuming StackSetExecutionRole in target accounts.
+
+StackSetExecutionRole → lives in target accounts (Dev AccoountIDdevID and Prod itself if you also want deployments there).
+
+Trusts the Admin role in the management account.
+
+Has permissions to create resources (I’ll attach AdministratorAccess for simplicity — you can restrict later).
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: Roles required for self-managed CloudFormation StackSets
+
+Parameters:
+  AdminAccountId:
+    Type: String
+    Description: The AWS Account ID of the administrator (management) account
+  TargetAccountId:
+    Type: String
+    Description: The AWS Account ID where the execution role will be created
+  CreateAdminRole:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Set to true in the admin (management) account to create StackSetAdminRole
+  CreateExecutionRole:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Set to true in the target account(s) to create StackSetExecutionRole
+
+Conditions:
+  IsAdmin: !Equals [!Ref CreateAdminRole, "true"]
+  IsExecution: !Equals [!Ref CreateExecutionRole, "true"]
+
+Resources:
+
+  StackSetAdminRole:
+    Condition: IsAdmin
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: StackSetAdminRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StackSetAdminPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub "arn:aws:iam::${TargetAccountId}:role/StackSetExecutionRole"
+
+  StackSetExecutionRole:
+    Condition: IsExecution
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: StackSetExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AdminAccountId}:role/StackSetAdminRole"
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+
+## Removing stackset instance from prod
+
+aws cloudformation list-stack-sets --profile Prod
+
+aws cloudformation delete-stack-instances \
+  --stack-set-name ExampleS3StackSet \
+  --accounts AccountId \
+  --regions us-east-1 \
+  --retain-stacks \
+  --no-retain-stacks \
+  --operation-preferences FailureToleranceCount=0,MaxConcurrentCount=1 \
+  --profile Prod
+
+
+
+
+## Delete the stackset itself
+aws cloudformation delete-stack-set \
+  --stack-set-name ExampleS3StackSet \
+  --profile Dev
+

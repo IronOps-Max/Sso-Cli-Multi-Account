@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Roles required for self-managed CloudFormation StackSets
+
+Parameters:
+  AdminAccountId:
+    Type: String
+    Description: The AWS Account ID of the administrator (management) account
+  TargetAccountId:
+    Type: String
+    Description: The AWS Account ID where the execution role will be created
+  CreateAdminRole:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Set to true in the admin (management) account to create StackSetAdminRole
+  CreateExecutionRole:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Set to true in the target account(s) to create StackSetExecutionRole
+
+Conditions:
+  IsAdmin: !Equals [!Ref CreateAdminRole, "true"]
+  IsExecution: !Equals [!Ref CreateExecutionRole, "true"]
+
+Resources:
+
+  StackSetAdminRole:
+    Condition: IsAdmin
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: StackSetAdminRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StackSetAdminPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub "arn:aws:iam::${TargetAccountId}:role/StackSetExecutionRole"
+
+  StackSetExecutionRole:
+    Condition: IsExecution
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: StackSetExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AdminAccountId}:role/StackSetAdminRole"
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess

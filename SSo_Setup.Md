@@ -80,4 +80,40 @@ output = json
 
 Then running aws s3 ls (without --profile) will use this default.
 
+## 🔹 Add a Bash/Zsh function (aws-switch)
+
+You can create a helper in your ~/.bashrc or ~/.zshrc:
+
+aws-switch() {
+    if [ -z "$1" ]; then
+        echo "Usage: aws-switch <profile-name>"
+        echo "Available profiles:"
+        aws configure list-profiles
+    else
+        export AWS_PROFILE=$1
+        echo "Switched to AWS profile: $AWS_PROFILE"
+    fi
+}
+
+
+Then reload your shell:
+
+source ~/.bashrc   # or source ~/.zshrc
+
+🔹 Usage
+aws-switch dev-sso
+aws sts get-caller-identity
+
+
+Output shows you’re logged in under that account.
+
+aws-switch prod-sso
+aws s3 ls
+
+## 🔹 Bonus: Show Current Profile
+
+You can always check which profile you’re using:
+
+echo $AWS_PROFILE
+
 
