@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CodeDeploy Application and Deployment Group
+
+Parameters:
+  VpcId:
+    Type: String
+  ASGName:
+    Type: String
+  ALBTargetGroupARN:
+    Type: String
+
+Resources:
+  # CodeDeploy Service Role
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForEC2
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      Path: /
+
+  # CodeDeploy Application
+  WebApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: WebApp
+      ComputePlatform: Server
+
+  # Deployment Group
+  WebDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref WebApp
+      DeploymentGroupName: WebAppDeploymentGroup
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      AutoScalingGroups:
+        - !Ref ASGName
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !Ref ALBTargetGroupARN
+      DeploymentStyle:
+        DeploymentType: IN_PLACE
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      Ec2TagFilters: []

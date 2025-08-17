@@ -1,12 +1,23 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Parent Stack for Production-ready VPC + Compute
+Description: Full Production Stack: VPC + Compute + Deployment + CI/CD
 
 Parameters:
   VpcCidr:
     Type: String
     Default: 10.0.0.0/16
+  GitHubOwner:
+    Type: String
+  GitHubRepo:
+    Type: String
+  GitHubBranch:
+    Type: String
+    Default: main
+  GitHubToken:
+    Type: String
+    NoEcho: true
 
 Resources:
+  # 1️⃣ VPC
   VPCStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -14,6 +25,7 @@ Resources:
       Parameters:
         VpcCidr: !Ref VpcCidr
 
+  # 2️⃣ Subnets & NAT
   SubnetStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -25,6 +37,7 @@ Resources:
         PrivateSubnet1Cidr: 10.0.3.0/24
         PrivateSubnet2Cidr: 10.0.4.0/24
 
+  # 3️⃣ Security Groups
   SecurityGroupStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -32,6 +45,7 @@ Resources:
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
 
+  # 4️⃣ Compute (ALB + ASG)
   ComputeStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -42,31 +56,45 @@ Resources:
         PrivateSubnets: !GetAtt SubnetStack.Outputs.PrivateSubnets
         WebSG: !GetAtt SecurityGroupStack.Outputs.WebSGId
 
+  # 5️⃣ CodeDeploy Application & Deployment Group
+  DeployStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./deploy.yaml
+      Parameters:
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        ASGName: !GetAtt ComputeStack.Outputs.ASG
+        ALBTargetGroupARN: !GetAtt ComputeStack.Outputs.TargetGroup
+
+  # 6️⃣ CI/CD Pipeline
+  PipelineStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./pipeline.yaml
+      Parameters:
+        GitHubOwner: !Ref GitHubOwner
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+        GitHubToken: !Ref GitHubToken
+        CodeDeployApplication: !GetAtt DeployStack.Outputs.WebApp
+        CodeDeployDeploymentGroup: !GetAtt DeployStack.Outputs.WebDeploymentGroup
+
 Outputs:
   VpcId:
-    Description: VPC ID
     Value: !GetAtt VPCStack.Outputs.VpcId
-
   PublicSubnets:
-    Description: Public Subnet IDs
     Value: !GetAtt SubnetStack.Outputs.PublicSubnets
-
   PrivateSubnets:
-    Description: Private Subnet IDs
     Value: !GetAtt SubnetStack.Outputs.PrivateSubnets
-
-  WebSecurityGroup:
-    Description: Web Security Group ID
+  WebSG:
     Value: !GetAtt SecurityGroupStack.Outputs.WebSGId
-
   ALBDNS:
-    Description: Application Load Balancer DNS
     Value: !GetAtt ComputeStack.Outputs.ALB
-
-  TargetGroupARN:
-    Description: ALB Target Group ARN
-    Value: !GetAtt ComputeStack.Outputs.TargetGroup
-
-  AutoScalingGroupName:
-    Description: Web Auto Scaling Group Name
+  ASG:
     Value: !GetAtt ComputeStack.Outputs.ASG
+  CodeDeployApplication:
+    Value: !GetAtt DeployStack.Outputs.WebApp
+  CodeDeployDeploymentGroup:
+    Value: !GetAtt DeployStack.Outputs.WebDeploymentGroup
+  PipelineName:
+    Value: !Ref PipelineStack
