@@ -10,14 +10,14 @@ Resources:
   VPCStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./vpc.yaml
+      TemplateURL: s3://ironcore-stackset-templates/vpc.yaml
       Parameters:
         VpcCidr: !Ref VpcCidr
 
   SubnetStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./subnets.yaml
+      TemplateURL: s3://ironcore-stackset-templates/subnets.yaml
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
         PublicSubnet1Cidr: 10.0.1.0/24
@@ -28,14 +28,14 @@ Resources:
   SecurityGroupStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./sg.yaml
+      TemplateURL: s3://ironcore-stackset-templates/sg.yaml
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
 
   ComputeStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./compute.yaml
+      TemplateURL: s3://ironcore-stackset-templates/compute.yaml
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
         PublicSubnets: !GetAtt SubnetStack.Outputs.PublicSubnets
@@ -45,7 +45,7 @@ Resources:
   DeployStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./deploy.yaml
+      TemplateURL: s3://ironcore-stackset-templates/deploy.yaml
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
         ASGName: !GetAtt ComputeStack.Outputs.ASG
