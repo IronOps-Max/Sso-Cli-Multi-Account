@@ -1,11 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Parent Stack for Production-ready VPC
+Description: Parent Stack for Production-ready VPC + Compute
 
 Parameters:
   VpcCidr:
     Type: String
     Default: 10.0.0.0/16
-    Description: CIDR for VPC
 
 Resources:
   VPCStack:
@@ -32,3 +31,42 @@ Resources:
       TemplateURL: ./sg.yaml
       Parameters:
         VpcId: !GetAtt VPCStack.Outputs.VpcId
+
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./compute.yaml
+      Parameters:
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PublicSubnets: !GetAtt SubnetStack.Outputs.PublicSubnets
+        PrivateSubnets: !GetAtt SubnetStack.Outputs.PrivateSubnets
+        WebSG: !GetAtt SecurityGroupStack.Outputs.WebSGId
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !GetAtt VPCStack.Outputs.VpcId
+
+  PublicSubnets:
+    Description: Public Subnet IDs
+    Value: !GetAtt SubnetStack.Outputs.PublicSubnets
+
+  PrivateSubnets:
+    Description: Private Subnet IDs
+    Value: !GetAtt SubnetStack.Outputs.PrivateSubnets
+
+  WebSecurityGroup:
+    Description: Web Security Group ID
+    Value: !GetAtt SecurityGroupStack.Outputs.WebSGId
+
+  ALBDNS:
+    Description: Application Load Balancer DNS
+    Value: !GetAtt ComputeStack.Outputs.ALB
+
+  TargetGroupARN:
+    Description: ALB Target Group ARN
+    Value: !GetAtt ComputeStack.Outputs.TargetGroup
+
+  AutoScalingGroupName:
+    Description: Web Auto Scaling Group Name
+    Value: !GetAtt ComputeStack.Outputs.ASG
