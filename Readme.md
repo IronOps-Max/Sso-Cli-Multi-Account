@@ -78,7 +78,7 @@ aws cloudformation delete-stack-instances \
 
 ## Delete the stack itself 
 aws cloudformation delete-stack-set \
-  --stack-set-name VpcStackSet
+  --stack-set-name WebAppStackSet
 
 
 ## creating stackset with nested stack
@@ -88,3 +88,17 @@ aws cloudformation create-stack-set \
   --administration-role-arn arn:aws:iam::272495906318:role/StackSetAdminRole \
   --execution-role-name StackSetExecutionRole \
   --capabilities CAPABILITY_NAMED_IAM \
+
+## if made update to nested stack here cmd to update stackset
+aws cloudformation update-stack-set \
+  --stack-set-name WebAppStackSet \
+  --template-url https://ironcore-stackset-templates.s3.us-east-1.amazonaws.com/main.yaml \
+  --administration-role-arn arn:aws:iam::272495906318:role/StackSetAdminRole \
+  --execution-role-name StackSetExecutionRole \
+  --capabilities CAPABILITY_NAMED_IAM \
+
+## apply update stack instance
+aws cloudformation update-stack-instances \
+  --stack-set-name WebAppStackSet \
+  --accounts 111111111111 222222222222 \
+  --regions us-east-1
