@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Full Production Stack: VPC + Compute + Deployment + CI/CD
+Description: Full Production Stack VPC + Compute + Deployment + CI/CD
 
 Parameters:
   VpcCidr:
