@@ -302,12 +302,12 @@ aws cloudformation list-stack-sets --profile Prod
 
 aws cloudformation delete-stack-instances \
   --stack-set-name ExampleS3StackSet \
-  --accounts AccountId \
+  --accounts 315089529175 \
   --regions us-east-1 \
   --retain-stacks \
   --no-retain-stacks \
   --operation-preferences FailureToleranceCount=0,MaxConcurrentCount=1 \
-  --profile Prod
+  --profile Dev
 
 
 

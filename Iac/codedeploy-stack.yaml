@@ -1,0 +1,34 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CodeDeploy App + Deployment Groups
+
+Parameters:
+  DevASG: String
+  ProdASG: String
+  DevRole: String
+  ProdRole: String
+
+Resources:
+  MyCodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: MyApp
+
+  MyDeploymentGroupDev:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref MyCodeDeployApp
+      DeploymentGroupName: MyApp-Dev
+      ServiceRoleArn: !Ref DevRole
+      AutoScalingGroups:
+        - !Ref DevASG
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+
+  MyDeploymentGroupProd:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref MyCodeDeployApp
+      DeploymentGroupName: MyApp-Prod
+      ServiceRoleArn: !Ref ProdRole
+      AutoScalingGroups:
+        - !Ref ProdASG
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
